@@ -97,25 +97,63 @@ async def cmd_status(message: types.Message):
 
 @dp.message(Command("givepro7"))
 async def cmd_give_pro_7days(message: types.Message):
-    if str(message.from_user.id) != ADMIN_ID: return
+    user_id_str = str(message.from_user.id)
+    logger.info(f"[Admin Check] User {user_id_str} trying to use givepro7. Expected ADMIN_ID: {ADMIN_ID}")
+    
+    if user_id_str != str(ADMIN_ID).strip():
+        logger.warning(f"[Security] Unauthorized givepro7 attempt by {user_id_str}")
+        return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
+
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("⚠️ အသုံးပြုပုံ: `/givepro7 12345678`", parse_mode="Markdown")
+
     try:
-        target = int(message.text.split()[1])
-        if await set_user_plan(target, "pro", 7):
-            await message.answer(f"✅ User `{target}` ကို ၇ ရက် Pro ပေးပြီးပါပြီ။")
-            try: await bot.send_message(target, "🎉 ဂုဏ်ယူပါတယ်! ၇ ရက်တာ Pro Plan ရရှိပါပြီ။")
-            except: pass
-    except: pass
+        target = int(args[1])
+        success = await set_user_plan(target, "pro", days=7)
+        if success:
+            await message.answer(f"✅ User `{target}` ကို ၇ ရက် Pro Plan ပေးပြီးပါပြီ။", parse_mode="Markdown")
+            try: 
+                await bot.send_message(target, "🎉 ဂုဏ်ယူပါတယ်! သင့်ကို ၇ ရက်တာ Pro Plan အဆင့်မြှင့်ပေးလိုက်ပါပြီ။")
+            except Exception as e:
+                logger.error(f"[Telegram Notice Error] Could not message target user: {e}")
+        else:
+            await message.answer("❌ Database တွင် Update လုပ်၍ မရပါ။ Supabase Key သို့မဟုတ် Table Schema ကို စစ်ဆေးပါ။")
+    except ValueError:
+        await message.answer("❌ User ID သည် ဂဏန်း (Number) သာ ဖြစ်ရပါမည်။")
+    except Exception as e:
+        logger.error(f"[GivePro7 Error] {e}")
+        await message.answer(f"❌ အမှားအယွင်း ဖြစ်ပွားခဲ့သည်: {e}")
 
 @dp.message(Command("givepro30"))
 async def cmd_give_pro_30days(message: types.Message):
-    if str(message.from_user.id) != ADMIN_ID: return
+    user_id_str = str(message.from_user.id)
+    logger.info(f"[Admin Check] User {user_id_str} trying to use givepro30. Expected ADMIN_ID: {ADMIN_ID}")
+    
+    if user_id_str != str(ADMIN_ID).strip():
+        logger.warning(f"[Security] Unauthorized givepro30 attempt by {user_id_str}")
+        return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
+
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("⚠️ အသုံးပြုပုံ: `/givepro30 12345678`", parse_mode="Markdown")
+
     try:
-        target = int(message.text.split()[1])
-        if await set_user_plan(target, "pro", 30):
-            await message.answer(f"✅ User `{target}` ကို ၁ လ Pro ပေးပြီးပါပြီ။")
-            try: await bot.send_message(target, "🎉 ဂုဏ်ယူပါတယ်! ၁ လတာ Pro Plan ရရှိပါပြီ။")
-            except: pass
-    except: pass
+        target = int(args[1])
+        success = await set_user_plan(target, "pro", days=30)
+        if success:
+            await message.answer(f"✅ User `{target}` ကို ၁ လ Pro Plan ပေးပြီးပါပြီ။", parse_mode="Markdown")
+            try: 
+                await bot.send_message(target, "🎉 ဂုဏ်ယူပါတယ်! သင့်ကို ၁ လတာ Pro Plan အဆင့်မြှင့်ပေးလိုက်ပါပြီ။")
+            except Exception as e:
+                logger.error(f"[Telegram Notice Error] Could not message target user: {e}")
+        else:
+            await message.answer("❌ Database တွင် Update လုပ်၍ မရပါ။ Supabase Key သို့မဟုတ် Table Schema ကို စစ်ဆေးပါ။")
+    except ValueError:
+        await message.answer("❌ User ID သည် ဂဏန်း (Number) သာ ဖြစ်ရပါမည်။")
+    except Exception as e:
+        logger.error(f"[GivePro30 Error] {e}")
+        await message.answer(f"❌ အမှားအယွင်း ဖြစ်ပွားခဲ့သည်: {e}")
 
 @dp.message(F.text)
 async def handle_user_message(message: types.Message):
