@@ -41,13 +41,11 @@ WELCOME_VIDEO_URL = "https://hvmhuqzbzsebbqymibmo.supabase.co/storage/v1/object/
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     await get_or_create_user(user_id)
-    
     welcome_text = "Hello , Lisa ရဲ့ Private Chat Bot လေးက ကြိုဆိုပါတယ်နော်။ Private Chat မို့ အပြင်လောကရဲ့ ပင်ပန်းမှုတွေကို ဒီမှာ အမောဖြေလိုက်နော်"
-    
     try:
         await message.answer_animation(animation=WELCOME_VIDEO_URL, caption=welcome_text)
     except Exception as e:
-        logger.error(f"[Start Command Error] Video ပို့ရာတွင် အမှားရှိသည်: {e}")
+        logger.error(f"[Start Command Error]: {e}")
         await message.answer(welcome_text)
 
 async def setup_bot_commands(bot: Bot):
@@ -60,15 +58,14 @@ async def setup_bot_commands(bot: Bot):
 
 @dp.message(Command("new_chat"))
 async def cmd_new_chat(message: types.Message):
-    user_id = message.from_user.id
-    if await clear_history(user_id):
+    if await clear_history(message.from_user.id):
         await message.answer("✅ မှတ်ဉာဏ်ဟောင်းများကို အောင်မြင်စွာ ဖျက်လင်းလိုက်ပါပြီ။")
     else:
         await message.answer("⚠️ အမှားတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
 
 @dp.message(Command("admin"))
 async def cmd_admin(message: types.Message):
-    await message.answer("👨‍💻 Admin နှင့် ဆက်သွယ်ရန် လိုအပ်ပါက အောက်ပါ လင့်ခ်မှတစ်ဆင့် ဆက်သွယ်နိုင်ပါသည်:\n\n👉 @slipme_mm")
+    await message.answer("👨‍💻 Admin နှင့် ဆက်သွယ်ရန်:\n\n👉 @slipme_mm")
 
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
@@ -100,7 +97,7 @@ async def cmd_give_pro_7days(message: types.Message):
     try:
         target = int(message.text.split()[1])
         if await set_user_plan(target, "pro", 7):
-            await message.answer(f"✅ ၇ ရက် Pro ပေးပြီးပါပြီ။")
+            await message.answer(f"✅ User `{target}` ကို ၇ ရက် Pro ပေးပြီးပါပြီ။")
             try: await bot.send_message(target, "🎉 ဂုဏ်ယူပါတယ်! ၇ ရက်တာ Pro Plan ရရှိပါပြီ။")
             except: pass
     except: pass
@@ -111,7 +108,7 @@ async def cmd_give_pro_30days(message: types.Message):
     try:
         target = int(message.text.split()[1])
         if await set_user_plan(target, "pro", 30):
-            await message.answer(f"✅ ၁ လ Pro ပေးပြီးပါပြီ။")
+            await message.answer(f"✅ User `{target}` ကို ၁ လ Pro ပေးပြီးပါပြီ။")
             try: await bot.send_message(target, "🎉 ဂုဏ်ယူပါတယ်! ၁ လတာ Pro Plan ရရှိပါပြီ။")
             except: pass
     except: pass
@@ -123,17 +120,18 @@ async def handle_user_message(message: types.Message):
     
     is_allowed, reason, char_limit = await check_usage_allowed(user_id)
     
+    # 📌 LIMIT CHECK: Limit ပြည့်မှသာ ခလုတ်ပြမည်
     if not is_allowed:
         if reason in ["Supabase Error", "Database Exception"]:
-            return await message.answer(f"❌ Database နှင့် ချိတ်ဆက်၍ မရပါ။ (Reason: {reason})")
+            return await message.answer(f"❌ Database နှင့် ချိတ်ဆက်၍ မရပါ။ ({reason})")
         else:
-            # လစ်မစ်ပြည့်မှသာ ခလုတ်ပြမည်
             return await message.answer("⚠️ ၅ နာရီအတွင်း Free version ဖြင့် ပြောဆိုခွင့် အကြိမ်ရေ (၁၀) ကြိမ် ပြည့်သွားပါပြီ။", reply_markup=get_upgrade_keyboard())
 
     processing_msg = await message.answer("⏳ Lisa Typing...")
 
     try:
         chat_history = await get_chat_history(user_id, limit=100)
+        from ai_service import generate_response
         ai_response = await generate_response(user_text, history=chat_history)
         
         if not ai_response:
@@ -157,17 +155,15 @@ async def handle_user_message(message: types.Message):
             
         final_chunks = allowed_chunks
         
-        await update_usage(user_id, current_len)
+        await update_usage(user_id, current_len) # Atomic update to DB
         await save_chat(user_id, "user", user_text)
         await save_chat(user_id, "assistant", " ".join(final_chunks))
 
-        # စာပြန်တိုင်း ပြနေသော Pro ခလုတ်ကို ဖြုတ်လိုက်ပါပြီ (None ထားသည်)
-        custom_keyboard = None 
-
+        # စာပြန်တိုင်း ပြနေသော Pro ခလုတ်ကို ဖြုတ်လိုက်ပါပြီ
         for index, chunk in enumerate(final_chunks):
             await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
             typing_delay = min(max(len(chunk) * 0.03, 1.0), 4.0)
-            await asyncio.sleep(typing_delay)
+            await asyncio.sleep(typing_delay) # Polling မှာ ဒီ Delay က အလုပ်လုပ်ပါတယ်
 
             if len(chunk) > 4096:
                 for x in range(0, len(chunk), 4096):
@@ -180,47 +176,32 @@ async def handle_user_message(message: types.Message):
         try: await processing_msg.edit_text("❌ အမှားအယွင်းတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
         except: pass
 
-# --- Morning Broadcast လုပ်မည့် Function ---
+# --- Morning Broadcast ---
 async def trigger_morning_broadcast():
-    """UptimeRobot မှ လှမ်းခေါ်သောအခါ အလုပ်လုပ်မည့် Function"""
     try:
-        # ရန်ကုန်စံတော်ချိန် (UTC +6:30) တွက်ချက်ခြင်း
         yangon_tz = timezone(timedelta(hours=6, minutes=30))
         now = datetime.now(yangon_tz)
-        
-        # မနက် ၈ နာရီ မထိုးသေးပါက ဘာမှ မလုပ်ပါ
-        if now.hour < 8:
-            return "Too early"
+        if now.hour < 8: return "Too early"
             
         today_str = now.strftime("%Y-%m-%d")
         all_users = await get_all_users()
-        
-        # ယနေ့ စာမရသေးသော User များကိုသာ ရွေးချယ်ခြင်း
         target_users = [u['telegram_id'] for u in all_users if str(u.get('last_morning_msg_date')) != today_str]
-        
-        if not target_users:
-            return "No pending users"
+        if not target_users: return "No pending users"
             
-        # AI ဆီမှ Message တောင်းခြင်း (၁ ကြိမ်သာ)
         morning_msg = await generate_morning_message()
-        if not morning_msg:
-            return "AI failed to generate message"
-            
-        # [SPLIT] ဖြုတ်ပြီး စာပိုဒ်တစ်ခုတည်းဖြစ်အောင် လုပ်ခြင်း
+        if not morning_msg: return "AI failed"
         morning_msg = morning_msg.replace("[SPLIT]", "\n\n")
 
-        # User အားလုံးဆီသို့ ပတ်ချာလည် ပို့ပေးခြင်း (Rate Limit မမိစေရန် asyncio.sleep ခံထားသည်)
         success_count = 0
         for uid in target_users:
             try:
                 await bot.send_animation(chat_id=uid, animation=WELCOME_VIDEO_URL, caption=morning_msg)
                 await update_morning_date(uid, today_str)
                 success_count += 1
-                await asyncio.sleep(0.1) # Telegram Anti-Spam Protection
+                await asyncio.sleep(0.1) # Anti-Spam
             except Exception as e:
-                logger.error(f"Failed to send morning msg to {uid}: {e}")
+                logger.error(f"Failed morning msg to {uid}: {e}")
                 
-        logger.info(f"[Broadcast] Sent morning message to {success_count} users.")
         return f"Success: {success_count}"
     except Exception as e:
         logger.error(f"[Broadcast Error] {e}")
