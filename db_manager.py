@@ -31,6 +31,7 @@ async def get_session():
     return await ai_get_session()
 
 async def get_or_create_user(telegram_id: int):
+    """Core Column များကိုသာ အသုံးပြု၍ Error ကင်းစွာ အကောင့်တည်ဆောက်မည်"""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
@@ -44,15 +45,21 @@ async def get_or_create_user(telegram_id: int):
                         "plan_type": "free", 
                         "message_count": 0, 
                         "last_reset": int(time.time()),
-                        "pro_expiry_date": 0,
-                        "last_morning_msg_date": ""
+                        "pro_expiry_date": 0
+                        # last_morning_msg_date ကို ဖြုတ်ထားသဖြင့် DB Error လုံးဝ မတက်တော့ပါ
                     }
-                    await session.post(create_url, headers=HEADERS, json=payload)
+                    post_resp = await session.post(create_url, headers=HEADERS, json=payload)
+                    if post_resp.status not in (200, 201, 204):
+                        err = await post_resp.text()
+                        logger.error(f"[DB Insert Error] Status: {post_resp.status}, Detail: {err}")
+            else:
+                err = await response.text()
+                logger.error(f"[DB GET Error in get_or_create] Status: {response.status}, Detail: {err}")
     except Exception as e:
         logger.error(f"[DB] Exception in get_or_create_user: {str(e)}")
 
 async def get_user_info(telegram_id: int) -> Optional[Dict]:
-    """Safe function to get user details for status command."""
+    """Safe function to get user details, Auto-creates if missing."""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
@@ -61,6 +68,17 @@ async def get_user_info(telegram_id: int) -> Optional[Dict]:
                 data = await response.json()
                 if data and len(data) > 0:
                     return data[0]
+                else:
+                    # အချက်အလက် မရှိပါက ချက်ချင်း Database သို့သွင်းမည်
+                    await get_or_create_user(telegram_id)
+                    async with session.get(url, headers=HEADERS) as res2:
+                        if res2.status == 200:
+                            d2 = await res2.json()
+                            if d2 and len(d2) > 0:
+                                return d2[0]
+            else:
+                err = await response.text()
+                logger.error(f"[DB Error in get_user_info] Status: {response.status}, Detail: {err}")
     except Exception as e:
         logger.error(f"[DB] Error in get_user_info: {e}")
     return None
@@ -72,12 +90,13 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
         async with session.get(url, headers=HEADERS) as response:
             if response.status != 200:
                 err = await response.text()
-                logger.error(f"[DB Error] Status: {response.status}, Detail: {err}")
+                logger.error(f"[DB Error in check_usage] Status: {response.status}, Detail: {err}")
                 return False, "Supabase Error", 0
                 
             data = await response.json()
             if not data or len(data) == 0:
                 await get_or_create_user(telegram_id)
+                # ယခုအခါ အကောင့်သေချာပေါက် ဝင်သွားပြီဖြစ်၍ Allow ပေးလိုက်ပါမည်
                 return True, "New user created", FREE_CHAR_LIMIT
             
             user = data[0]
@@ -105,7 +124,7 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
                 return False, "Limit exceeded", char_limit
             return True, "Allowed", char_limit
     except Exception as e:
-        logger.exception(f"[DB] CRITICAL ERROR: {str(e)}")
+        logger.exception(f"[DB] CRITICAL ERROR in check_usage: {str(e)}")
         return False, "Database Exception", 0
 
 async def update_usage(telegram_id: int, char_count: int):
@@ -122,7 +141,8 @@ async def update_usage(telegram_id: int, char_count: int):
                     patch_url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
                     async with session.patch(patch_url, headers=HEADERS, json={"message_count": new_count}) as patch_resp:
                         if patch_resp.status not in (200, 204):
-                            logger.error(f"[DB] Patch Error: {patch_resp.status}")
+                            err = await patch_resp.text()
+                            logger.error(f"[DB Patch Error in update_usage] Status: {patch_resp.status}, Detail: {err}")
     except Exception as e:
         logger.error(f"[DB] Error in update_usage: {e}")
 
@@ -188,6 +208,9 @@ async def update_morning_date(telegram_id: int, date_str: str):
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
-        await session.patch(url, headers=HEADERS, json={"last_morning_msg_date": date_str})
+        patch_resp = await session.patch(url, headers=HEADERS, json={"last_morning_msg_date": date_str})
+        if patch_resp.status not in (200, 204):
+            # Optional column ဖြစ်သဖြင့် fail သွားလျှင် log သာမှတ်မည်
+            logger.warning(f"Morning date not updated (Column might be missing). Status: {patch_resp.status}")
     except Exception as e:
         logger.error(f"[DB] Error updating morning date: {e}")
