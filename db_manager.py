@@ -19,15 +19,10 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
-# ၅ နာရီပြည့်လျှင် Reset လုပ်ရန်
 FREE_RESET_SECONDS = 5 * 3600
 PRO_RESET_SECONDS = 4 * 3600
-
-# Message Limits
 FREE_MSG_LIMIT = 10
-PRO_MSG_LIMIT = float('inf') # အကန့်အသတ်မရှိ
-
-# Character Limits per response
+PRO_MSG_LIMIT = float('inf')
 FREE_CHAR_LIMIT = 500
 PRO_CHAR_LIMIT = 8000
 
@@ -49,7 +44,8 @@ async def get_or_create_user(telegram_id: int):
                         "plan_type": "free", 
                         "message_count": 0, 
                         "last_reset": int(time.time()),
-                        "pro_expiry_date": 0
+                        "pro_expiry_date": 0,
+                        "last_morning_msg_date": ""
                     }
                     await session.post(create_url, headers=HEADERS, json=payload)
     except Exception as e:
@@ -72,7 +68,6 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
             expiry_date = user.get('pro_expiry_date', 0)
             now = int(time.time())
 
-            # Pro သက်တမ်းကုန်သွားပါက Free သို့ အလိုအလျောက် ပြောင်းမည်
             if plan == 'pro' and expiry_date != 0 and now > expiry_date:
                 update_url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
                 await session.patch(update_url, headers=HEADERS, json={"plan_type": "free"})
@@ -84,13 +79,11 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
             limit = FREE_MSG_LIMIT if plan == 'free' else PRO_MSG_LIMIT
             char_limit = FREE_CHAR_LIMIT if plan == 'free' else PRO_CHAR_LIMIT
 
-            # သတ်မှတ်အချိန်ပြည့်ပါက Message Count ကို Zero ပြန်လုပ်မည်
             if now - last_reset > reset_time:
                 update_url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
                 await session.patch(update_url, headers=HEADERS, json={"message_count": 0, "last_reset": now})
                 count = 0
 
-            # Pro User များအတွက် limit သည် infinity ဖြစ်သဖြင့် count >= limit သည် အမြဲတမ်း False ဖြစ်မည်
             if count >= limit:
                 return False, "Limit exceeded", char_limit
             return True, "Allowed", char_limit
@@ -135,7 +128,6 @@ async def save_chat(telegram_id: int, role: str, content: str):
     except Exception as e:
         logger.error(f"[DB] Error in save_chat: {e}")
 
-# Limit ကို 20 မှ 100 သို့ ပြောင်းလဲထားသည် (Sliding Window Context)
 async def get_chat_history(telegram_id: int, limit: int = 100) -> List[Dict[str, str]]:
     url = f"{SUPABASE_URL}/rest/v1/chat_history?telegram_id=eq.{telegram_id}&order=created_at.desc&limit={limit}"
     session = await get_session()
@@ -157,3 +149,25 @@ async def clear_history(telegram_id: int) -> bool:
     except Exception as e:
         logger.error(f"[DB] Error in clear_history: {e}")
         return False
+
+# ----- Morning Broadcast အတွက် DB Functions အသစ်များ -----
+async def get_all_users() -> List[Dict]:
+    """Database ထဲရှိ User အားလုံးကို ဆွဲထုတ်မည်"""
+    url = f"{SUPABASE_URL}/rest/v1/users?select=telegram_id,last_morning_msg_date"
+    session = await get_session()
+    try:
+        async with session.get(url, headers=HEADERS) as response:
+            if response.status == 200:
+                return await response.json()
+    except Exception as e:
+        logger.error(f"[DB] Error in get_all_users: {e}")
+    return []
+
+async def update_morning_date(telegram_id: int, date_str: str):
+    """ယနေ့ စာပို့ပြီးကြောင်း ရက်စွဲမှတ်မည်"""
+    url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
+    session = await get_session()
+    try:
+        await session.patch(url, headers=HEADERS, json={"last_morning_msg_date": date_str})
+    except Exception as e:
+        logger.error(f"[DB] Error updating morning date: {e}")
