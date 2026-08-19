@@ -10,7 +10,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-# သတိပြုရန်: ဤနေရာတွင် RLS ကို ကျော်ဖြတ်ရန် Supabase ၏ Service Role Key ကို သုံးရန် အကြံပြုပါသည်။
+# ⚠️ သတိပြုရန်: RLS Error များကို ကျော်လွှားရန် ဤနေရာတွင် Service Role (Secret) Key ကို မဖြစ်မနေ သုံးပါ။
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 HEADERS = {
@@ -32,7 +32,7 @@ async def get_session():
     return await ai_get_session()
 
 async def get_or_create_user(telegram_id: int) -> bool:
-    """အကောင့်သစ်ကို လုံခြုံစွာ တည်ဆောက်ပေးမည်။ အောင်မြင်ပါက True ပြန်ပေးမည်။"""
+    """User အချက်အလက်ကို စစ်ဆေးမည်။ မရှိပါက အသစ်တည်ဆောက်မည် (Auto-Provision)"""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
@@ -40,7 +40,6 @@ async def get_or_create_user(telegram_id: int) -> bool:
             if response.status == 200:
                 data = await response.json()
                 if not data or len(data) == 0:
-                    # အကောင့်မရှိသေးသဖြင့် အသစ်ဆောက်မည်
                     create_url = f"{SUPABASE_URL}/rest/v1/users"
                     payload = {
                         "telegram_id": telegram_id, 
@@ -58,20 +57,18 @@ async def get_or_create_user(telegram_id: int) -> bool:
                 return True
             else:
                 err = await response.text()
-                logger.error(f"[DB GET Error] Status: {response.status}, Detail: {err}")
+                logger.error(f"[DB GET Error in get_or_create] Status: {response.status}, Detail: {err}")
                 return False
     except Exception as e:
         logger.error(f"[DB Exception] get_or_create_user: {str(e)}")
         return False
 
 async def get_user_info(telegram_id: int) -> Optional[Dict]:
-    """Status command အတွက် User အချက်အလက်ကို လုံခြုံစွာ ယူပေးမည်။"""
+    """Status command အတွက် User ၏ နောက်ဆုံးအခြေအနေကို ဆွဲထုတ်မည်"""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
-        # အချက်အလက် မရှိပါက အရင်ဆုံး တည်ဆောက်မည် (Auto-Provisioning)
-        await get_or_create_user(telegram_id)
-        
+        await get_or_create_user(telegram_id) # Ensure user exists
         async with session.get(url, headers=HEADERS) as response:
             if response.status == 200:
                 data = await response.json()
@@ -85,30 +82,27 @@ async def get_user_info(telegram_id: int) -> Optional[Dict]:
     return None
 
 async def check_usage_allowed(telegram_id: int) -> tuple:
+    """Message ပို့ခွင့် ရှိ/မရှိ စစ်ဆေးမည် (Free Limit = 10)"""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
-        # အကောင့်ရှိ/မရှိ အရင်စစ်ဆေးပြီး လိုအပ်ပါက ဆောက်မည်
         created = await get_or_create_user(telegram_id)
         if not created:
-            return False, "Supabase Database Insert Error (Check RLS or Keys)", 0
+            return False, "Database Insertion Failed (Check Service Role Key)", 0
 
         async with session.get(url, headers=HEADERS) as response:
             if response.status != 200:
-                err = await response.text()
-                logger.error(f"[DB Error in check_usage] Status: {response.status}, Detail: {err}")
                 return False, "Database Connection Error", 0
                 
             data = await response.json()
             if not data or len(data) == 0:
-                return False, "User Record Not Found After Creation", 0
+                return False, "User Record Not Found", 0
             
             user = data[0]
             plan = user.get('plan_type', 'free')
             expiry_date = user.get('pro_expiry_date', 0)
             now = int(time.time())
 
-            # Pro သက်တမ်းကုန်သွားပါက Free သို့ ပြောင်းမည်
             if plan == 'pro' and expiry_date != 0 and now > expiry_date:
                 update_url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
                 await session.patch(update_url, headers=HEADERS, json={"plan_type": "free"})
@@ -120,7 +114,6 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
             limit = FREE_MSG_LIMIT if plan == 'free' else PRO_MSG_LIMIT
             char_limit = FREE_CHAR_LIMIT if plan == 'free' else PRO_CHAR_LIMIT
 
-            # ၅ နာရီပြည့်ပါက Reset လုပ်မည်
             if now - last_reset > reset_time:
                 update_url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
                 await session.patch(update_url, headers=HEADERS, json={"message_count": 0, "last_reset": now})
@@ -134,7 +127,7 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
         return False, "Database Exception", 0
 
 async def update_usage(telegram_id: int, char_count: int):
-    """Message Limit ကို အတိအကျ (Atomic) တိုးပေးမည်"""
+    """Message Limit ကို အတိအကျ တိုးမည် (Atomic Logic)"""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
@@ -148,8 +141,7 @@ async def update_usage(telegram_id: int, char_count: int):
                     patch_url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
                     async with session.patch(patch_url, headers=HEADERS, json={"message_count": new_count}) as patch_resp:
                         if patch_resp.status not in (200, 204):
-                            err = await patch_resp.text()
-                            logger.error(f"[DB Patch Error in update_usage] Status: {patch_resp.status}, Detail: {err}")
+                            logger.error(f"[DB Patch Error] Status: {patch_resp.status}")
     except Exception as e:
         logger.error(f"[DB Exception] update_usage: {e}")
 
@@ -165,10 +157,10 @@ async def set_user_plan(telegram_id: int, plan: str, days: int = 30):
             payload["pro_expiry_date"] = 0
         await session.patch(url, headers=HEADERS, json=payload)
         return True
-    except Exception as e:
-        logger.error(f"[DB Exception] set_user_plan: {e}")
+    except Exception:
         return False
 
+# 📌 မူလ chat_history ကို ပြန်လည် အသုံးပြုထားပါသည်
 async def save_chat(telegram_id: int, role: str, content: str):
     url = f"{SUPABASE_URL}/rest/v1/chat_history"
     data = {"telegram_id": telegram_id, "role": role, "content": content}
@@ -186,9 +178,8 @@ async def get_chat_history(telegram_id: int, limit: int = 100) -> List[Dict[str,
             if response.status == 200:
                 data = await response.json()
                 return [{"role": row["role"], "content": row["content"]} for row in data][::-1]
-    except Exception as e:
-        logger.error(f"[DB Exception] get_chat_history: {e}")
-    return []
+    except Exception:
+        return []
 
 async def clear_history(telegram_id: int) -> bool:
     url = f"{SUPABASE_URL}/rest/v1/chat_history?telegram_id=eq.{telegram_id}"
@@ -196,8 +187,7 @@ async def clear_history(telegram_id: int) -> bool:
     try:
         async with session.delete(url, headers=HEADERS) as response:
             return response.status in (200, 204)
-    except Exception as e:
-        logger.error(f"[DB Exception] clear_history: {e}")
+    except Exception:
         return False
 
 async def get_all_users() -> List[Dict]:
@@ -207,14 +197,13 @@ async def get_all_users() -> List[Dict]:
         async with session.get(url, headers=HEADERS) as response:
             if response.status == 200:
                 return await response.json()
-    except Exception as e:
-        logger.error(f"[DB Exception] get_all_users: {e}")
-    return []
+    except Exception:
+        return []
 
 async def update_morning_date(telegram_id: int, date_str: str):
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
         await session.patch(url, headers=HEADERS, json={"last_morning_msg_date": date_str})
-    except Exception as e:
-        logger.error(f"[DB Exception] update_morning_date: {e}")
+    except Exception:
+        pass
