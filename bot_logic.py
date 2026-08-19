@@ -31,11 +31,10 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# 📌 MUTEX LOCKS DICTIONARY (Race Condition ကာကွယ်ရန်)
+# 📌 MUTEX LOCK FOR RACE CONDITION PREVENTION
 user_locks = {}
 
 def get_user_lock(user_id: int) -> asyncio.Lock:
-    """User တစ်ယောက်စီအတွက် သီးသန့် Lock ကို ဖန်တီး/ရယူမည်"""
     if user_id not in user_locks:
         user_locks[user_id] = asyncio.Lock()
     return user_locks[user_id]
@@ -84,7 +83,7 @@ async def cmd_status(message: types.Message):
     
     user_data = await get_user_info(user_id)
     if not user_data:
-        return await processing_msg.edit_text("❌ အချက်အလက် ရှာမတွေ့ပါ သို့မဟုတ် Database Error ရှိနေပါသည်။")
+        return await processing_msg.edit_text("❌ အချက်အလက် ရှာမတွေ့ပါ သို့မဟုတ် Database Security Error ရှိနေပါသည်။ Admin ကို အကြောင်းကြားပါ။")
         
     plan = user_data.get('plan_type', 'free')
     count = user_data.get('message_count', 0)
@@ -124,14 +123,14 @@ async def handle_user_message(message: types.Message):
     user_id = message.from_user.id
     user_text = message.text
     
-    # 📌 LOCK ACQUIRED: User တစ်ယောက်တည်းက စာတွေ ဆက်တိုက်ပို့လာရင် ပြိုင်တူမသွားဘဲ တန်းစီစေမည်
+    # 📌 Strict Asynchronous Lock: Spam ကာကွယ်ရန် တန်းစီစနစ်
     lock = get_user_lock(user_id)
     async with lock:
         is_allowed, reason, char_limit = await check_usage_allowed(user_id)
         
         if not is_allowed:
-            if reason in ["Supabase Error", "Database Exception"]:
-                return await message.answer(f"❌ Database နှင့် ချိတ်ဆက်၍ မရပါ။ ({reason})")
+            if "Error" in reason or "Exception" in reason:
+                return await message.answer(f"❌ Database Error: {reason}")
             else:
                 return await message.answer("⚠️ ၅ နာရီအတွင်း Free version ဖြင့် ပြောဆိုခွင့် အကြိမ်ရေ (၁၀) ကြိမ် ပြည့်သွားပါပြီ။", reply_markup=get_upgrade_keyboard())
 
@@ -162,14 +161,15 @@ async def handle_user_message(message: types.Message):
                 
             final_chunks = allowed_chunks
             
-            await update_usage(user_id, current_len) # Atomic update to DB
+            # Database သို့ Count အတိအကျ တိုးမည်
+            await update_usage(user_id, current_len)
             await save_chat(user_id, "user", user_text)
             await save_chat(user_id, "assistant", " ".join(final_chunks))
 
             for index, chunk in enumerate(final_chunks):
                 await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
                 typing_delay = min(max(len(chunk) * 0.03, 1.0), 4.0)
-                await asyncio.sleep(typing_delay) 
+                await asyncio.sleep(typing_delay)
 
                 if len(chunk) > 4096:
                     for x in range(0, len(chunk), 4096):
@@ -182,7 +182,7 @@ async def handle_user_message(message: types.Message):
             try: await processing_msg.edit_text("❌ အမှားအယွင်းတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
             except: pass
 
-# --- Morning Broadcast ---
+# --- Morning Broadcast (ယခင်အတိုင်း) ---
 async def trigger_morning_broadcast():
     try:
         yangon_tz = timezone(timedelta(hours=6, minutes=30))
