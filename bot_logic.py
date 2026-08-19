@@ -156,7 +156,7 @@ async def handle_user_message(message: types.Message):
         else:
             return await message.answer("⚠️ ၅ နာရီအတွင်း Free version ဖြင့် ပြောဆိုခွင့် အကြိမ်ရေ (၁၀) ကြိမ် ပြည့်သွားပါပြီ။", reply_markup=get_upgrade_keyboard())
 
-    processing_msg = await message.answer("⏳ တွေးနေပါသည်...")
+    processing_msg = await message.answer("⏳ Lisa Typing...")
 
     try:
         chat_history = await get_chat_history(user_id, limit=100)
