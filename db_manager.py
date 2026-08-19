@@ -1,4 +1,4 @@
-# Filename: db_manager.py
+#Filename: db_manager.py
 import os
 import time
 import aiohttp
@@ -57,7 +57,10 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
     try:
         async with session.get(url, headers=HEADERS) as response:
             if response.status != 200:
+                error_body = await response.text()
+                logger.error(f"[DB Error] Status: {response.status}, Detail: {error_body}")
                 return False, "Supabase Error", 0
+                
             data = await response.json()
             if not data or len(data) == 0:
                 await get_or_create_user(telegram_id)
@@ -84,22 +87,36 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
                 await session.patch(update_url, headers=HEADERS, json={"message_count": 0, "last_reset": now})
                 count = 0
 
+            # တိကျသော Limit စစ်ဆေးခြင်း
             if count >= limit:
                 return False, "Limit exceeded", char_limit
             return True, "Allowed", char_limit
     except Exception as e:
-        logger.exception(f"[DB] CRITICAL ERROR: {str(e)}")
+        logger.exception(f"[DB] CRITICAL ERROR in check_usage_allowed: {str(e)}")
         return False, "Database Exception", 0
 
 async def update_usage(telegram_id: int, char_count: int):
+    """User ၏ message_count ကို တိကျစွာ increment ပြုလုပ်ပြီး DB status ကို validate လုပ်သည်"""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
         async with session.get(url, headers=HEADERS) as response:
-            data = await response.json()
-            if data and len(data) > 0:
-                current_count = data[0].get('message_count', 0)
-                await session.patch(url, headers=HEADERS, json={"message_count": current_count + 1})
+            if response.status == 200:
+                data = await response.json()
+                if data and len(data) > 0:
+                    current_count = int(data[0].get('message_count', 0))
+                    new_count = current_count + 1
+                    
+                    # Update request with explicit response validation
+                    patch_url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
+                    async with session.patch(patch_url, headers=HEADERS, json={"message_count": new_count}) as patch_resp:
+                        if patch_resp.status not in (200, 204):
+                            err_detail = await patch_resp.text()
+                            logger.error(f"[DB] Failed to update message_count. Status: {patch_resp.status}, Detail: {err_detail}")
+                        else:
+                            logger.info(f"[DB] Successfully updated message_count to {new_count} for user {telegram_id}")
+            else:
+                logger.error(f"[DB] Failed to fetch user for update_usage. Status: {response.status}")
     except Exception as e:
         logger.error(f"[DB] Error in update_usage: {e}")
 
@@ -150,9 +167,7 @@ async def clear_history(telegram_id: int) -> bool:
         logger.error(f"[DB] Error in clear_history: {e}")
         return False
 
-# ----- Morning Broadcast အတွက် DB Functions အသစ်များ -----
 async def get_all_users() -> List[Dict]:
-    """Database ထဲရှိ User အားလုံးကို ဆွဲထုတ်မည်"""
     url = f"{SUPABASE_URL}/rest/v1/users?select=telegram_id,last_morning_msg_date"
     session = await get_session()
     try:
@@ -164,7 +179,6 @@ async def get_all_users() -> List[Dict]:
     return []
 
 async def update_morning_date(telegram_id: int, date_str: str):
-    """ယနေ့ စာပို့ပြီးကြောင်း ရက်စွဲမှတ်မည်"""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
