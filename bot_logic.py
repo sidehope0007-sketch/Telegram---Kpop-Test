@@ -1,4 +1,4 @@
-# Filename: bot_logic.py
+// Filename: bot_logic.py
 import os
 import asyncio
 import logging
@@ -33,22 +33,21 @@ def get_upgrade_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="💎 Pro Plan ဝယ်ယူရန်", callback_data="buy_pro")]
     ])
 
-WELCOME_GIF_URL = "https://srtteanzawxfaadaoelk.supabase.co/storage/v1/object/public/Telegram%20Ai%20photo/sexgpt.gif"
+# MP4 URL ကို ပြောင်းလဲသတ်မှတ်ထားသည်
+WELCOME_VIDEO_URL = "https://hvmhuqzbzsebbqymibmo.supabase.co/storage/v1/object/public/Model%20Telegram/LisaTelegram.mp4"
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     await get_or_create_user(user_id)
     
-    welcome_text = (
-        f"မင်္ဂလာပါ {message.from_user.first_name}!\n\n"
-        "သင့်ရဲ့ အလိုရမ္မက်တွေကို ဖြည့်ဆီးပေးဖို့ ကျွန်မ Sex GPT က သင့်အနားရှိနေပါပြီ။\n\n"
-        "တူတူ မှောင်ဖို့အတွက် အဆင့်သင့်ဖြစ်နေပါပြီ။\n"
-        "သင့်ရဲ့ မေးခွန်းတွေကို ယခုပဲ စတင်မေးမြန်းနိုင်ပါပြီ!"
-    )
+    welcome_text = "Hello , Lisa ရဲ့ Private Chat Bot လေးက ကြိုဆိုပါတယ်နော်။ Private Chat မို့ အပြင်လောကရဲ့ ပင်ပန်းမှုတွေကို ဒီမှာ အမောဖြေလိုက်နော်"
+    
     try:
-        await message.answer_animation(animation=WELCOME_GIF_URL, caption=welcome_text)
-    except Exception:
+        # answer_animation သည် MP4 များကို အလိုအလျောက် Mute & Loop လုပ်ပေးပြီး GIF သဖွယ်ပြသပေးပါသည်
+        await message.answer_animation(animation=WELCOME_VIDEO_URL, caption=welcome_text)
+    except Exception as e:
+        logger.error(f"[Start Command Error] Video ပို့ရာတွင် အမှားရှိသည်: {e}")
         await message.answer(welcome_text)
 
 async def setup_bot_commands(bot: Bot):
@@ -61,7 +60,93 @@ async def setup_bot_commands(bot: Bot):
     ]
     await bot.set_my_commands(bot_commands)
 
-# ... (cmd_new_chat, cmd_admin, cmd_status, cmd_give_pro_7days, cmd_give_pro_30days commands များကို မူလအတိုင်း ထားရှိပါ) ...
+@dp.message(Command("new_chat"))
+async def cmd_new_chat(message: types.Message):
+    user_id = message.from_user.id
+    if await clear_history(user_id):
+        await message.answer("✅ မှတ်ဉာဏ်ဟောင်းများကို အောင်မြင်စွာ ဖျက်လင်းလိုက်ပါပြီ။")
+    else:
+        await message.answer("⚠️ အမှားတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
+
+@dp.message(Command("admin"))
+async def cmd_admin(message: types.Message):
+    await message.answer("👨‍💻 Admin နှင့် ဆက်သွယ်ရန် လိုအပ်ပါက အောက်ပါ လင့်ခ်မှတစ်ဆင့် ဆက်သွယ်နိုင်ပါသည်:\n\n👉 @slipme_mm")
+
+@dp.message(Command("status"))
+async def cmd_status(message: types.Message):
+    user_id = message.from_user.id
+    is_allowed, reason, char_limit = await check_usage_allowed(user_id)
+    
+    from db_manager import SUPABASE_URL, HEADERS
+    import aiohttp
+    from ai_service import get_session
+    
+    url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{user_id}"
+    session = await get_session()
+    
+    async with session.get(url, headers=HEADERS) as response:
+        if response.status == 200:
+            data = await response.json()
+            if data:
+                user = data[0]
+                plan = user.get('plan_type', 'free')
+                count = user.get('message_count', 0)
+                status_text = (
+                    f"📊 **သင်၏ အသုံးပြုမှု အခြေအနေ**\n\n"
+                    f"👤 User ID: `{user_id}`\n"
+                    f"💎 Plan: `{plan.upper()}`\n"
+                    f"💬 အသုံးပြုပြီးသမျှ: `{count}` messages\n"
+                    f"📏 တစ်ကြိမ်စာ စာလုံးရေ ကန့်သတ်ချက်: `{char_limit}`"
+                )
+                await message.answer(status_text, parse_mode="Markdown")
+            else:
+                await message.answer("⚠️ အချက်အလက် ရှာမတွေ့ပါ။")
+        else:
+            await message.answer("❌ Database ချိတ်ဆက်မှု အမှားရှိနေပါသည်။")
+
+@dp.message(Command("givepro7"))
+async def cmd_give_pro_7days(message: types.Message):
+    if str(message.from_user.id) != ADMIN_ID:
+        return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
+
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("⚠️ အသုံးပြုပုံ: `/givepro7 12345678`", parse_mode="Markdown")
+
+    try:
+        target_user_id = int(args[1])
+        success = await set_user_plan(target_user_id, "pro", days=7)
+        if success:
+            await message.answer(f"✅ User `{target_user_id}` ကို ၇ ရက် Pro Plan ပေးပြီးပါပြီ။", parse_mode="Markdown")
+            try:
+                await bot.send_message(target_user_id, "🎉 ဂုဏ်ယူပါတယ်! သင့်ကို ၇ ရက်တာ Pro Plan အဆင့်မြှင့်ပေးလိုက်ပါပြီ။")
+            except: pass
+        else:
+            await message.answer("❌ အမှားတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
+    except ValueError:
+        await message.answer("❌ User ID သည် နံပါတ်ဖြစ်ရပါမည်။")
+
+@dp.message(Command("givepro30"))
+async def cmd_give_pro_30days(message: types.Message):
+    if str(message.from_user.id) != ADMIN_ID:
+        return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
+
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("⚠️ အသုံးပြုပုံ: `/givepro30 12345678`", parse_mode="Markdown")
+
+    try:
+        target_user_id = int(args[1])
+        success = await set_user_plan(target_user_id, "pro", days=30)
+        if success:
+            await message.answer(f"✅ User `{target_user_id}` ကို ၁ လ Pro Plan ပေးပြီးပါပြီ။", parse_mode="Markdown")
+            try:
+                await bot.send_message(target_user_id, "🎉 ဂုဏ်ယူပါတယ်! သင့်ကို ၁ လတာ Pro Plan အဆင့်မြှင့်ပေးလိုက်ပါပြီ။")
+            except: pass
+        else:
+            await message.answer("❌ အမှားတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
+    except ValueError:
+        await message.answer("❌ User ID သည် နံပါတ်ဖြစ်ရပါမည်။")
 
 @dp.message(F.text)
 async def handle_user_message(message: types.Message):
@@ -70,12 +155,13 @@ async def handle_user_message(message: types.Message):
     
     is_allowed, reason, char_limit = await check_usage_allowed(user_id)
     if not is_allowed:
-        return await message.answer("⚠️ Free version တွင်ပြန်ဖြေသောစာလုံးရေတွက်ကန့်သတ်ထားပါသည်။", reply_markup=get_upgrade_keyboard())
+        return await message.answer("⚠️ ၅ နာရီအတွင်း Free version ဖြင့် ပြောဆိုခွင့် အကြိမ်ရေ (၁၀) ကြိမ် ပြည့်သွားပါပြီ။", reply_markup=get_upgrade_keyboard())
 
-    processing_msg = await message.answer("⏳ Sex GPT တွေးနေပါသည်...")
+    processing_msg = await message.answer("⏳ တွေးနေပါသည်...")
 
     try:
-        chat_history = await get_chat_history(user_id, limit=20)
+        # Context Window ကို အစောင် ၁၀၀ အထိ ဆွဲထုတ်မည်
+        chat_history = await get_chat_history(user_id, limit=100)
         ai_response = await generate_response(user_text, history=chat_history)
         
         if not ai_response:
@@ -83,15 +169,14 @@ async def handle_user_message(message: types.Message):
             
         await processing_msg.delete() 
 
-        # 1. AI ပြန်လာသောစာကို [SPLIT] ဖြင့် ခွဲထုတ်ခြင်း
+        # [SPLIT] ဖြင့် Message များကို သဘာဝကျကျ ခွဲထုတ်ခြင်း
         raw_chunks = ai_response.split("[SPLIT]")
         chunks = [c.strip() for c in raw_chunks if c.strip()]
         
-        # 2. အကယ်၍ AI က [SPLIT] မထည့်ခဲ့ပါက မူလစာသားအတိုင်း ထားရန်
         if not chunks:
             chunks = [ai_response.strip()]
 
-        # 3. Char Limit စစ်ဆေးခြင်း (စုစုပေါင်း စာလုံးရေ)
+        # Char Limit စစ်ဆေးခြင်း
         allowed_chunks = []
         current_len = 0
         for chunk in chunks:
@@ -105,12 +190,11 @@ async def handle_user_message(message: types.Message):
             
         final_chunks = allowed_chunks
         
-        # Database သိမ်းဆည်းခြင်း (AI ၏ မူလတုန့်ပြန်မှုကို တစ်ခါတည်းသိမ်းမည်)
+        # Database သိမ်းဆည်းခြင်း
         await update_usage(user_id, current_len)
         await save_chat(user_id, "user", user_text)
         await save_chat(user_id, "assistant", " ".join(final_chunks))
 
-        # 4. Pro Upgrade ခလုတ် ပြင်ဆင်ခြင်း
         admin_username = "slipme_mm" 
         custom_keyboard = None
         if char_limit == FREE_CHAR_LIMIT:
@@ -118,18 +202,14 @@ async def handle_user_message(message: types.Message):
                 [InlineKeyboardButton(text="💎 Pro Plan ဝယ်ယူရန် ", url=f"https://t.me/{admin_username}")]
             ])
 
-        # 5. သဘာဝကျကျ အချိန်ဆိုင်း၍ (Typing delay) ပို့လွှတ်ခြင်း
+        # Typing Delay ဖြင့် တစ်စောင်ချင်းစီ ပို့လွှတ်ခြင်း
         for index, chunk in enumerate(final_chunks):
             is_last_chunk = (index == len(final_chunks) - 1)
             
-            # Typing action ပြသခြင်း
             await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
-            
-            # စာလုံးရေအပေါ်မူတည်၍ အချိန်ဆိုင်းခြင်း (အနည်းဆုံး ၁ စက္ကန့်၊ အများဆုံး ၄ စက္ကန့်)
             typing_delay = min(max(len(chunk) * 0.03, 1.0), 4.0)
             await asyncio.sleep(typing_delay)
 
-            # Telegram ၏ 4096 limit ကိုပါ ကာကွယ်ထားခြင်း
             if len(chunk) > 4096:
                 for x in range(0, len(chunk), 4096):
                     is_sub_last = (x + 4096 >= len(chunk))
