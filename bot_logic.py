@@ -7,6 +7,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from aiogram.enums import ChatAction
 from dotenv import load_dotenv
+from datetime import datetime, timezone, timedelta
 
 from db_manager import (
     check_usage_allowed, 
@@ -16,9 +17,10 @@ from db_manager import (
     get_chat_history, 
     clear_history, 
     set_user_plan,
-    FREE_CHAR_LIMIT
+    get_all_users,
+    update_morning_date
 )
-from ai_service import generate_response
+from ai_service import generate_response, generate_morning_message
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -30,7 +32,7 @@ dp = Dispatcher()
 
 def get_upgrade_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 Pro Plan ဝယ်ယူရန်", callback_data="buy_pro")]
+        [InlineKeyboardButton(text="💎 Pro Plan ဝယ်ယူရန်", url="https://t.me/slipme_mm")]
     ])
 
 WELCOME_VIDEO_URL = "https://hvmhuqzbzsebbqymibmo.supabase.co/storage/v1/object/public/Model%20Telegram/LisaTelegram.mp4"
@@ -52,9 +54,7 @@ async def setup_bot_commands(bot: Bot):
     bot_commands = [
         BotCommand(command="/new_chat", description="🔄 New Chat စတင်ရန်"),
         BotCommand(command="/admin", description="👨‍💻 Admin နှင့် ဆက်သွယ်ရန်"),
-        BotCommand(command="/status", description="📊 အသုံးပြုမှု စစ်ဆေးရန်"),
-        BotCommand(command="/givepro7", description="💎 ၇ ရက် Pro ပေးရန်"),
-        BotCommand(command="/givepro30", description="💎 ၁ လ Pro ပေးရန်"),
+        BotCommand(command="/status", description="📊 အသုံးပြုမှု စစ်ဆေးရန်")
     ]
     await bot.set_my_commands(bot_commands)
 
@@ -76,12 +76,9 @@ async def cmd_status(message: types.Message):
     is_allowed, reason, char_limit = await check_usage_allowed(user_id)
     
     from db_manager import SUPABASE_URL, HEADERS
-    import aiohttp
     from ai_service import get_session
-    
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{user_id}"
     session = await get_session()
-    
     async with session.get(url, headers=HEADERS) as response:
         if response.status == 200:
             data = await response.json()
@@ -94,53 +91,30 @@ async def cmd_status(message: types.Message):
                     f"👤 User ID: `{user_id}`\n"
                     f"💎 Plan: `{plan.upper()}`\n"
                     f"💬 အသုံးပြုပြီးသမျှ: `{count}` messages\n"
-                    f"📏 တစ်ကြိမ်စာ စာလုံးရေ ကန့်သတ်ချက်: `{char_limit}`"
                 )
                 await message.answer(status_text, parse_mode="Markdown")
-            else:
-                await message.answer("⚠️ အချက်အလက် ရှာမတွေ့ပါ။")
-        else:
-            await message.answer("❌ Database ချိတ်ဆက်မှု အမှားရှိနေပါသည်။")
 
 @dp.message(Command("givepro7"))
 async def cmd_give_pro_7days(message: types.Message):
-    if str(message.from_user.id) != ADMIN_ID:
-        return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
-    args = message.text.split()
-    if len(args) < 2:
-        return await message.answer("⚠️ အသုံးပြုပုံ: `/givepro7 12345678`", parse_mode="Markdown")
+    if str(message.from_user.id) != ADMIN_ID: return
     try:
-        target_user_id = int(args[1])
-        success = await set_user_plan(target_user_id, "pro", days=7)
-        if success:
-            await message.answer(f"✅ User `{target_user_id}` ကို ၇ ရက် Pro Plan ပေးပြီးပါပြီ။", parse_mode="Markdown")
-            try:
-                await bot.send_message(target_user_id, "🎉 ဂုဏ်ယူပါတယ်! သင့်ကို ၇ ရက်တာ Pro Plan အဆင့်မြှင့်ပေးလိုက်ပါပြီ။")
+        target = int(message.text.split()[1])
+        if await set_user_plan(target, "pro", 7):
+            await message.answer(f"✅ ၇ ရက် Pro ပေးပြီးပါပြီ။")
+            try: await bot.send_message(target, "🎉 ဂုဏ်ယူပါတယ်! ၇ ရက်တာ Pro Plan ရရှိပါပြီ။")
             except: pass
-        else:
-            await message.answer("❌ အမှားတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
-    except ValueError:
-        await message.answer("❌ User ID သည် နံပါတ်ဖြစ်ရပါမည်။")
+    except: pass
 
 @dp.message(Command("givepro30"))
 async def cmd_give_pro_30days(message: types.Message):
-    if str(message.from_user.id) != ADMIN_ID:
-        return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
-    args = message.text.split()
-    if len(args) < 2:
-        return await message.answer("⚠️ အသုံးပြုပုံ: `/givepro30 12345678`", parse_mode="Markdown")
+    if str(message.from_user.id) != ADMIN_ID: return
     try:
-        target_user_id = int(args[1])
-        success = await set_user_plan(target_user_id, "pro", days=30)
-        if success:
-            await message.answer(f"✅ User `{target_user_id}` ကို ၁ လ Pro Plan ပေးပြီးပါပြီ။", parse_mode="Markdown")
-            try:
-                await bot.send_message(target_user_id, "🎉 ဂုဏ်ယူပါတယ်! သင့်ကို ၁ လတာ Pro Plan အဆင့်မြှင့်ပေးလိုက်ပါပြီ။")
+        target = int(message.text.split()[1])
+        if await set_user_plan(target, "pro", 30):
+            await message.answer(f"✅ ၁ လ Pro ပေးပြီးပါပြီ။")
+            try: await bot.send_message(target, "🎉 ဂုဏ်ယူပါတယ်! ၁ လတာ Pro Plan ရရှိပါပြီ။")
             except: pass
-        else:
-            await message.answer("❌ အမှားတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
-    except ValueError:
-        await message.answer("❌ User ID သည် နံပါတ်ဖြစ်ရပါမည်။")
+    except: pass
 
 @dp.message(F.text)
 async def handle_user_message(message: types.Message):
@@ -149,14 +123,14 @@ async def handle_user_message(message: types.Message):
     
     is_allowed, reason, char_limit = await check_usage_allowed(user_id)
     
-    # 📌 ပြင်ဆင်ချက် (Fix): Database Error နှင့် Limit ကို တိကျစွာ ခွဲခြားခြင်း
     if not is_allowed:
         if reason in ["Supabase Error", "Database Exception"]:
-            return await message.answer(f"❌ Database နှင့် ချိတ်ဆက်၍ မရပါ။ (Reason: {reason})\nAdmin သို့ အကြောင်းကြားပေးပါ။")
+            return await message.answer(f"❌ Database နှင့် ချိတ်ဆက်၍ မရပါ။ (Reason: {reason})")
         else:
+            # လစ်မစ်ပြည့်မှသာ ခလုတ်ပြမည်
             return await message.answer("⚠️ ၅ နာရီအတွင်း Free version ဖြင့် ပြောဆိုခွင့် အကြိမ်ရေ (၁၀) ကြိမ် ပြည့်သွားပါပြီ။", reply_markup=get_upgrade_keyboard())
 
-    processing_msg = await message.answer("⏳ Lisa Typing...")
+    processing_msg = await message.answer("⏳ တွေးနေပါသည်...")
 
     try:
         chat_history = await get_chat_history(user_id, limit=100)
@@ -169,17 +143,14 @@ async def handle_user_message(message: types.Message):
 
         raw_chunks = ai_response.split("[SPLIT]")
         chunks = [c.strip() for c in raw_chunks if c.strip()]
-        
-        if not chunks:
-            chunks = [ai_response.strip()]
+        if not chunks: chunks = [ai_response.strip()]
 
         allowed_chunks = []
         current_len = 0
         for chunk in chunks:
             if current_len + len(chunk) > char_limit:
                 remaining = char_limit - current_len
-                if remaining > 0:
-                    allowed_chunks.append(chunk[:remaining])
+                if remaining > 0: allowed_chunks.append(chunk[:remaining])
                 break
             allowed_chunks.append(chunk)
             current_len += len(chunk)
@@ -190,30 +161,67 @@ async def handle_user_message(message: types.Message):
         await save_chat(user_id, "user", user_text)
         await save_chat(user_id, "assistant", " ".join(final_chunks))
 
-        admin_username = "slipme_mm" 
-        custom_keyboard = None
-        if char_limit == FREE_CHAR_LIMIT:
-            custom_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💎 Pro Plan ဝယ်ယူရန် ", url=f"https://t.me/{admin_username}")]
-            ])
+        # စာပြန်တိုင်း ပြနေသော Pro ခလုတ်ကို ဖြုတ်လိုက်ပါပြီ (None ထားသည်)
+        custom_keyboard = None 
 
         for index, chunk in enumerate(final_chunks):
-            is_last_chunk = (index == len(final_chunks) - 1)
-            
             await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
             typing_delay = min(max(len(chunk) * 0.03, 1.0), 4.0)
             await asyncio.sleep(typing_delay)
 
             if len(chunk) > 4096:
                 for x in range(0, len(chunk), 4096):
-                    is_sub_last = (x + 4096 >= len(chunk))
-                    keyboard_to_send = custom_keyboard if (is_last_chunk and is_sub_last) else None
-                    await message.answer(chunk[x:x+4096], reply_markup=keyboard_to_send)
+                    await message.answer(chunk[x:x+4096], reply_markup=None)
             else:
-                await message.answer(chunk, reply_markup=custom_keyboard if is_last_chunk else None)
+                await message.answer(chunk, reply_markup=None)
 
     except Exception as e:
         logger.error(f"[Bot Logic Error] {e}")
-        try:
-            await processing_msg.edit_text("❌ အမှားအယွင်းတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
+        try: await processing_msg.edit_text("❌ အမှားအယွင်းတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
         except: pass
+
+# --- Morning Broadcast လုပ်မည့် Function ---
+async def trigger_morning_broadcast():
+    """UptimeRobot မှ လှမ်းခေါ်သောအခါ အလုပ်လုပ်မည့် Function"""
+    try:
+        # ရန်ကုန်စံတော်ချိန် (UTC +6:30) တွက်ချက်ခြင်း
+        yangon_tz = timezone(timedelta(hours=6, minutes=30))
+        now = datetime.now(yangon_tz)
+        
+        # မနက် ၈ နာရီ မထိုးသေးပါက ဘာမှ မလုပ်ပါ
+        if now.hour < 8:
+            return "Too early"
+            
+        today_str = now.strftime("%Y-%m-%d")
+        all_users = await get_all_users()
+        
+        # ယနေ့ စာမရသေးသော User များကိုသာ ရွေးချယ်ခြင်း
+        target_users = [u['telegram_id'] for u in all_users if str(u.get('last_morning_msg_date')) != today_str]
+        
+        if not target_users:
+            return "No pending users"
+            
+        # AI ဆီမှ Message တောင်းခြင်း (၁ ကြိမ်သာ)
+        morning_msg = await generate_morning_message()
+        if not morning_msg:
+            return "AI failed to generate message"
+            
+        # [SPLIT] ဖြုတ်ပြီး စာပိုဒ်တစ်ခုတည်းဖြစ်အောင် လုပ်ခြင်း
+        morning_msg = morning_msg.replace("[SPLIT]", "\n\n")
+
+        # User အားလုံးဆီသို့ ပတ်ချာလည် ပို့ပေးခြင်း (Rate Limit မမိစေရန် asyncio.sleep ခံထားသည်)
+        success_count = 0
+        for uid in target_users:
+            try:
+                await bot.send_animation(chat_id=uid, animation=WELCOME_VIDEO_URL, caption=morning_msg)
+                await update_morning_date(uid, today_str)
+                success_count += 1
+                await asyncio.sleep(0.1) # Telegram Anti-Spam Protection
+            except Exception as e:
+                logger.error(f"Failed to send morning msg to {uid}: {e}")
+                
+        logger.info(f"[Broadcast] Sent morning message to {success_count} users.")
+        return f"Success: {success_count}"
+    except Exception as e:
+        logger.error(f"[Broadcast Error] {e}")
+        return "Error"
