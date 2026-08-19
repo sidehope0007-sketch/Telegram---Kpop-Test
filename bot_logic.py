@@ -53,8 +53,7 @@ async def cmd_start(message: types.Message):
     welcome_text = "Hello , Lisa ရဲ့ Private Chat Bot လေးက ကြိုဆိုပါတယ်နော်။ Private Chat မို့ အပြင်လောကရဲ့ ပင်ပန်းမှုတွေကို ဒီမှာ အမောဖြေလိုက်နော်"
     try:
         await message.answer_animation(animation=WELCOME_VIDEO_URL, caption=welcome_text)
-    except Exception as e:
-        logger.error(f"[Start Command Error]: {e}")
+    except Exception:
         await message.answer(welcome_text)
 
 async def setup_bot_commands(bot: Bot):
@@ -83,7 +82,7 @@ async def cmd_status(message: types.Message):
     
     user_data = await get_user_info(user_id)
     if not user_data:
-        return await processing_msg.edit_text("❌ အချက်အလက် ရှာမတွေ့ပါ သို့မဟုတ် Database Security Error ရှိနေပါသည်။ Admin ကို အကြောင်းကြားပါ။")
+        return await processing_msg.edit_text("❌ အချက်အလက် ရှာမတွေ့ပါ သို့မဟုတ် Database Security (RLS) Error ရှိနေပါသည်။ Admin ကို အကြောင်းကြားပါ။")
         
     plan = user_data.get('plan_type', 'free')
     count = user_data.get('message_count', 0)
@@ -182,7 +181,7 @@ async def handle_user_message(message: types.Message):
             try: await processing_msg.edit_text("❌ အမှားအယွင်းတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
             except: pass
 
-# --- Morning Broadcast (ယခင်အတိုင်း) ---
+# --- Morning Broadcast ---
 async def trigger_morning_broadcast():
     try:
         yangon_tz = timezone(timedelta(hours=6, minutes=30))
