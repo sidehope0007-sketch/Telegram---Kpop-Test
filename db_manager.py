@@ -1,4 +1,4 @@
-// Filename: db_manager.py
+# Filename: db_manager.py
 import os
 import time
 import aiohttp
