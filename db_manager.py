@@ -1,4 +1,4 @@
-#Filename: db_manager.py
+# Filename: db_manager.py
 import os
 import time
 import aiohttp
@@ -19,7 +19,7 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
-FREE_RESET_SECONDS = 5 * 3600
+FREE_RESET_SECONDS = 5 * 3600 # 5 Hours
 PRO_RESET_SECONDS = 4 * 3600
 FREE_MSG_LIMIT = 10
 PRO_MSG_LIMIT = float('inf')
@@ -57,8 +57,8 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
     try:
         async with session.get(url, headers=HEADERS) as response:
             if response.status != 200:
-                error_body = await response.text()
-                logger.error(f"[DB Error] Status: {response.status}, Detail: {error_body}")
+                err = await response.text()
+                logger.error(f"[DB Error] Status: {response.status}, Detail: {err}")
                 return False, "Supabase Error", 0
                 
             data = await response.json()
@@ -87,16 +87,14 @@ async def check_usage_allowed(telegram_id: int) -> tuple:
                 await session.patch(update_url, headers=HEADERS, json={"message_count": 0, "last_reset": now})
                 count = 0
 
-            # တိကျသော Limit စစ်ဆေးခြင်း
             if count >= limit:
                 return False, "Limit exceeded", char_limit
             return True, "Allowed", char_limit
     except Exception as e:
-        logger.exception(f"[DB] CRITICAL ERROR in check_usage_allowed: {str(e)}")
+        logger.exception(f"[DB] CRITICAL ERROR: {str(e)}")
         return False, "Database Exception", 0
 
 async def update_usage(telegram_id: int, char_count: int):
-    """User ၏ message_count ကို တိကျစွာ increment ပြုလုပ်ပြီး DB status ကို validate လုပ်သည်"""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
@@ -107,16 +105,10 @@ async def update_usage(telegram_id: int, char_count: int):
                     current_count = int(data[0].get('message_count', 0))
                     new_count = current_count + 1
                     
-                    # Update request with explicit response validation
                     patch_url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
                     async with session.patch(patch_url, headers=HEADERS, json={"message_count": new_count}) as patch_resp:
                         if patch_resp.status not in (200, 204):
-                            err_detail = await patch_resp.text()
-                            logger.error(f"[DB] Failed to update message_count. Status: {patch_resp.status}, Detail: {err_detail}")
-                        else:
-                            logger.info(f"[DB] Successfully updated message_count to {new_count} for user {telegram_id}")
-            else:
-                logger.error(f"[DB] Failed to fetch user for update_usage. Status: {response.status}")
+                            logger.error(f"[DB] Patch Error: {patch_resp.status}")
     except Exception as e:
         logger.error(f"[DB] Error in update_usage: {e}")
 
