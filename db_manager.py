@@ -51,6 +51,20 @@ async def get_or_create_user(telegram_id: int):
     except Exception as e:
         logger.error(f"[DB] Exception in get_or_create_user: {str(e)}")
 
+async def get_user_info(telegram_id: int) -> Optional[Dict]:
+    """Safe function to get user details for status command."""
+    url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
+    session = await get_session()
+    try:
+        async with session.get(url, headers=HEADERS) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data and len(data) > 0:
+                    return data[0]
+    except Exception as e:
+        logger.error(f"[DB] Error in get_user_info: {e}")
+    return None
+
 async def check_usage_allowed(telegram_id: int) -> tuple:
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
