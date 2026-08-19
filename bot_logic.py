@@ -18,7 +18,8 @@ from db_manager import (
     clear_history, 
     set_user_plan,
     get_all_users,
-    update_morning_date
+    update_morning_date,
+    get_user_info
 )
 from ai_service import generate_response, generate_morning_message
 
@@ -29,6 +30,15 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# 📌 MUTEX LOCKS DICTIONARY (Race Condition ကာကွယ်ရန်)
+user_locks = {}
+
+def get_user_lock(user_id: int) -> asyncio.Lock:
+    """User တစ်ယောက်စီအတွက် သီးသန့် Lock ကို ဖန်တီး/ရယူမည်"""
+    if user_id not in user_locks:
+        user_locks[user_id] = asyncio.Lock()
+    return user_locks[user_id]
 
 def get_upgrade_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -70,26 +80,22 @@ async def cmd_admin(message: types.Message):
 @dp.message(Command("status"))
 async def cmd_status(message: types.Message):
     user_id = message.from_user.id
-    is_allowed, reason, char_limit = await check_usage_allowed(user_id)
+    processing_msg = await message.answer("⏳ စစ်ဆေးနေပါသည်...")
     
-    from db_manager import SUPABASE_URL, HEADERS
-    from ai_service import get_session
-    url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{user_id}"
-    session = await get_session()
-    async with session.get(url, headers=HEADERS) as response:
-        if response.status == 200:
-            data = await response.json()
-            if data:
-                user = data[0]
-                plan = user.get('plan_type', 'free')
-                count = user.get('message_count', 0)
-                status_text = (
-                    f"📊 **သင်၏ အသုံးပြုမှု အခြေအနေ**\n\n"
-                    f"👤 User ID: `{user_id}`\n"
-                    f"💎 Plan: `{plan.upper()}`\n"
-                    f"💬 အသုံးပြုပြီးသမျှ: `{count}` messages\n"
-                )
-                await message.answer(status_text, parse_mode="Markdown")
+    user_data = await get_user_info(user_id)
+    if not user_data:
+        return await processing_msg.edit_text("❌ အချက်အလက် ရှာမတွေ့ပါ သို့မဟုတ် Database Error ရှိနေပါသည်။")
+        
+    plan = user_data.get('plan_type', 'free')
+    count = user_data.get('message_count', 0)
+    
+    status_text = (
+        f"📊 **သင်၏ အသုံးပြုမှု အခြေအနေ**\n\n"
+        f"👤 User ID: `{user_id}`\n"
+        f"💎 Plan: `{plan.upper()}`\n"
+        f"💬 အသုံးပြုပြီးသမျှ: `{count}` messages\n"
+    )
+    await processing_msg.edit_text(status_text, parse_mode="Markdown")
 
 @dp.message(Command("givepro7"))
 async def cmd_give_pro_7days(message: types.Message):
@@ -118,63 +124,63 @@ async def handle_user_message(message: types.Message):
     user_id = message.from_user.id
     user_text = message.text
     
-    is_allowed, reason, char_limit = await check_usage_allowed(user_id)
-    
-    # 📌 LIMIT CHECK: Limit ပြည့်မှသာ ခလုတ်ပြမည်
-    if not is_allowed:
-        if reason in ["Supabase Error", "Database Exception"]:
-            return await message.answer(f"❌ Database နှင့် ချိတ်ဆက်၍ မရပါ။ ({reason})")
-        else:
-            return await message.answer("⚠️ ၅ နာရီအတွင်း Free version ဖြင့် ပြောဆိုခွင့် အကြိမ်ရေ (၁၀) ကြိမ် ပြည့်သွားပါပြီ။", reply_markup=get_upgrade_keyboard())
-
-    processing_msg = await message.answer("⏳ Lisa Typing...")
-
-    try:
-        chat_history = await get_chat_history(user_id, limit=100)
-        from ai_service import generate_response
-        ai_response = await generate_response(user_text, history=chat_history)
+    # 📌 LOCK ACQUIRED: User တစ်ယောက်တည်းက စာတွေ ဆက်တိုက်ပို့လာရင် ပြိုင်တူမသွားဘဲ တန်းစီစေမည်
+    lock = get_user_lock(user_id)
+    async with lock:
+        is_allowed, reason, char_limit = await check_usage_allowed(user_id)
         
-        if not ai_response:
-            return await processing_msg.edit_text("❌ AI စနစ် ချို့ယွင်းနေပါသည်။")
-            
-        await processing_msg.delete() 
-
-        raw_chunks = ai_response.split("[SPLIT]")
-        chunks = [c.strip() for c in raw_chunks if c.strip()]
-        if not chunks: chunks = [ai_response.strip()]
-
-        allowed_chunks = []
-        current_len = 0
-        for chunk in chunks:
-            if current_len + len(chunk) > char_limit:
-                remaining = char_limit - current_len
-                if remaining > 0: allowed_chunks.append(chunk[:remaining])
-                break
-            allowed_chunks.append(chunk)
-            current_len += len(chunk)
-            
-        final_chunks = allowed_chunks
-        
-        await update_usage(user_id, current_len) # Atomic update to DB
-        await save_chat(user_id, "user", user_text)
-        await save_chat(user_id, "assistant", " ".join(final_chunks))
-
-        # စာပြန်တိုင်း ပြနေသော Pro ခလုတ်ကို ဖြုတ်လိုက်ပါပြီ
-        for index, chunk in enumerate(final_chunks):
-            await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
-            typing_delay = min(max(len(chunk) * 0.03, 1.0), 4.0)
-            await asyncio.sleep(typing_delay) # Polling မှာ ဒီ Delay က အလုပ်လုပ်ပါတယ်
-
-            if len(chunk) > 4096:
-                for x in range(0, len(chunk), 4096):
-                    await message.answer(chunk[x:x+4096], reply_markup=None)
+        if not is_allowed:
+            if reason in ["Supabase Error", "Database Exception"]:
+                return await message.answer(f"❌ Database နှင့် ချိတ်ဆက်၍ မရပါ။ ({reason})")
             else:
-                await message.answer(chunk, reply_markup=None)
+                return await message.answer("⚠️ ၅ နာရီအတွင်း Free version ဖြင့် ပြောဆိုခွင့် အကြိမ်ရေ (၁၀) ကြိမ် ပြည့်သွားပါပြီ။", reply_markup=get_upgrade_keyboard())
 
-    except Exception as e:
-        logger.error(f"[Bot Logic Error] {e}")
-        try: await processing_msg.edit_text("❌ အမှားအယွင်းတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
-        except: pass
+        processing_msg = await message.answer("⏳ Lisa Typing...")
+
+        try:
+            chat_history = await get_chat_history(user_id, limit=100)
+            ai_response = await generate_response(user_text, history=chat_history)
+            
+            if not ai_response:
+                return await processing_msg.edit_text("❌ AI စနစ် ချို့ယွင်းနေပါသည်။")
+                
+            await processing_msg.delete() 
+
+            raw_chunks = ai_response.split("[SPLIT]")
+            chunks = [c.strip() for c in raw_chunks if c.strip()]
+            if not chunks: chunks = [ai_response.strip()]
+
+            allowed_chunks = []
+            current_len = 0
+            for chunk in chunks:
+                if current_len + len(chunk) > char_limit:
+                    remaining = char_limit - current_len
+                    if remaining > 0: allowed_chunks.append(chunk[:remaining])
+                    break
+                allowed_chunks.append(chunk)
+                current_len += len(chunk)
+                
+            final_chunks = allowed_chunks
+            
+            await update_usage(user_id, current_len) # Atomic update to DB
+            await save_chat(user_id, "user", user_text)
+            await save_chat(user_id, "assistant", " ".join(final_chunks))
+
+            for index, chunk in enumerate(final_chunks):
+                await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+                typing_delay = min(max(len(chunk) * 0.03, 1.0), 4.0)
+                await asyncio.sleep(typing_delay) 
+
+                if len(chunk) > 4096:
+                    for x in range(0, len(chunk), 4096):
+                        await message.answer(chunk[x:x+4096], reply_markup=None)
+                else:
+                    await message.answer(chunk, reply_markup=None)
+
+        except Exception as e:
+            logger.error(f"[Bot Logic Error] {e}")
+            try: await processing_msg.edit_text("❌ အမှားအယွင်းတစ်ခု ဖြစ်ပွားခဲ့ပါသည်။")
+            except: pass
 
 # --- Morning Broadcast ---
 async def trigger_morning_broadcast():
@@ -198,7 +204,7 @@ async def trigger_morning_broadcast():
                 await bot.send_animation(chat_id=uid, animation=WELCOME_VIDEO_URL, caption=morning_msg)
                 await update_morning_date(uid, today_str)
                 success_count += 1
-                await asyncio.sleep(0.1) # Anti-Spam
+                await asyncio.sleep(0.1) 
             except Exception as e:
                 logger.error(f"Failed morning msg to {uid}: {e}")
                 
