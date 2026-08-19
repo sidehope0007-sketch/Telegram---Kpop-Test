@@ -31,9 +31,10 @@ async def on_startup(dispatcher, bot):
     logger.info("[System] Webhook successfully established.")
 
 async def on_shutdown(dispatcher, bot):
-    """Server ပိတ်ချိန်တွင် Webhook ကို ဖြုတ်ချပြီး Session များ ရှင်းလင်းမည့် Function"""
-    logger.info("[Webhook] Shutting down and removing webhook...")
-    await bot.delete_webhook()
+    """Server ပိတ်ချိန်တွင် Webhook ကို ဖြုတ်ချခြင်း မလုပ်တော့ဘဲ Session များသာ ရှင်းလင်းမည် (Race Condition ကာကွယ်ရန်)"""
+    logger.info("[Webhook] Shutting down... (Keeping webhook active for new instance)")
+    
+    # ဤနေရာတွင် ရှိခဲ့သော `await bot.delete_webhook()` ကို ဖယ်ရှားလိုက်ပါပြီ
     await bot.session.close()
     
     # AI Service မှ Global Session ကို လုံခြုံစွာ ပိတ်ခြင်း
@@ -42,7 +43,7 @@ async def on_shutdown(dispatcher, bot):
         await ai_session.close()
         
     logger.info("[System] Shutdown operations completed flawlessly.")
-
+    
 async def health_check(request):
     """UptimeRobot ကဲ့သို့ Service များအတွက် 200 OK ပြန်ပေးမည့် Endpoint"""
     return web.Response(text="Bot is operational and running via Webhook Architecture!", status=200)
