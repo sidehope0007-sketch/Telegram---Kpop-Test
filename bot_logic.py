@@ -33,7 +33,6 @@ def get_upgrade_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="💎 Pro Plan ဝယ်ယူရန်", callback_data="buy_pro")]
     ])
 
-# MP4 URL ကို ပြောင်းလဲသတ်မှတ်ထားသည်
 WELCOME_VIDEO_URL = "https://hvmhuqzbzsebbqymibmo.supabase.co/storage/v1/object/public/Model%20Telegram/LisaTelegram.mp4"
 
 @dp.message(CommandStart())
@@ -44,7 +43,6 @@ async def cmd_start(message: types.Message):
     welcome_text = "Hello , Lisa ရဲ့ Private Chat Bot လေးက ကြိုဆိုပါတယ်နော်။ Private Chat မို့ အပြင်လောကရဲ့ ပင်ပန်းမှုတွေကို ဒီမှာ အမောဖြေလိုက်နော်"
     
     try:
-        # answer_animation သည် MP4 များကို အလိုအလျောက် Mute & Loop လုပ်ပေးပြီး GIF သဖွယ်ပြသပေးပါသည်
         await message.answer_animation(animation=WELCOME_VIDEO_URL, caption=welcome_text)
     except Exception as e:
         logger.error(f"[Start Command Error] Video ပို့ရာတွင် အမှားရှိသည်: {e}")
@@ -108,11 +106,9 @@ async def cmd_status(message: types.Message):
 async def cmd_give_pro_7days(message: types.Message):
     if str(message.from_user.id) != ADMIN_ID:
         return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
-
     args = message.text.split()
     if len(args) < 2:
         return await message.answer("⚠️ အသုံးပြုပုံ: `/givepro7 12345678`", parse_mode="Markdown")
-
     try:
         target_user_id = int(args[1])
         success = await set_user_plan(target_user_id, "pro", days=7)
@@ -130,11 +126,9 @@ async def cmd_give_pro_7days(message: types.Message):
 async def cmd_give_pro_30days(message: types.Message):
     if str(message.from_user.id) != ADMIN_ID:
         return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
-
     args = message.text.split()
     if len(args) < 2:
         return await message.answer("⚠️ အသုံးပြုပုံ: `/givepro30 12345678`", parse_mode="Markdown")
-
     try:
         target_user_id = int(args[1])
         success = await set_user_plan(target_user_id, "pro", days=30)
@@ -154,13 +148,17 @@ async def handle_user_message(message: types.Message):
     user_text = message.text
     
     is_allowed, reason, char_limit = await check_usage_allowed(user_id)
+    
+    # 📌 ပြင်ဆင်ချက် (Fix): Database Error နှင့် Limit ကို တိကျစွာ ခွဲခြားခြင်း
     if not is_allowed:
-        return await message.answer("⚠️ ၅ နာရီအတွင်း Free version ဖြင့် ပြောဆိုခွင့် အကြိမ်ရေ (၁၀) ကြိမ် ပြည့်သွားပါပြီ။", reply_markup=get_upgrade_keyboard())
+        if reason in ["Supabase Error", "Database Exception"]:
+            return await message.answer(f"❌ Database နှင့် ချိတ်ဆက်၍ မရပါ။ (Reason: {reason})\nAdmin သို့ အကြောင်းကြားပေးပါ။")
+        else:
+            return await message.answer("⚠️ ၅ နာရီအတွင်း Free version ဖြင့် ပြောဆိုခွင့် အကြိမ်ရေ (၁၀) ကြိမ် ပြည့်သွားပါပြီ။", reply_markup=get_upgrade_keyboard())
 
     processing_msg = await message.answer("⏳ တွေးနေပါသည်...")
 
     try:
-        # Context Window ကို အစောင် ၁၀၀ အထိ ဆွဲထုတ်မည်
         chat_history = await get_chat_history(user_id, limit=100)
         ai_response = await generate_response(user_text, history=chat_history)
         
@@ -169,14 +167,12 @@ async def handle_user_message(message: types.Message):
             
         await processing_msg.delete() 
 
-        # [SPLIT] ဖြင့် Message များကို သဘာဝကျကျ ခွဲထုတ်ခြင်း
         raw_chunks = ai_response.split("[SPLIT]")
         chunks = [c.strip() for c in raw_chunks if c.strip()]
         
         if not chunks:
             chunks = [ai_response.strip()]
 
-        # Char Limit စစ်ဆေးခြင်း
         allowed_chunks = []
         current_len = 0
         for chunk in chunks:
@@ -190,7 +186,6 @@ async def handle_user_message(message: types.Message):
             
         final_chunks = allowed_chunks
         
-        # Database သိမ်းဆည်းခြင်း
         await update_usage(user_id, current_len)
         await save_chat(user_id, "user", user_text)
         await save_chat(user_id, "assistant", " ".join(final_chunks))
@@ -202,7 +197,6 @@ async def handle_user_message(message: types.Message):
                 [InlineKeyboardButton(text="💎 Pro Plan ဝယ်ယူရန် ", url=f"https://t.me/{admin_username}")]
             ])
 
-        # Typing Delay ဖြင့် တစ်စောင်ချင်းစီ ပို့လွှတ်ခြင်း
         for index, chunk in enumerate(final_chunks):
             is_last_chunk = (index == len(final_chunks) - 1)
             
