@@ -1,11 +1,10 @@
-#Filename: ai_service.py
+# Filename: ai_service.py
 import os
 import aiohttp
 import logging
 from typing import Optional, List, Dict
 from dotenv import load_dotenv
 
-# ပြင်ပ File (prompts.py) မှ SYSTEM_PROMPT ကို လှမ်းခေါ်ခြင်း
 from prompts import SYSTEM_PROMPT
 
 load_dotenv()
@@ -41,7 +40,7 @@ async def generate_response(prompt: str, history: List[Dict[str, str]] = None) -
     payload = {
         "model": MODEL_ID,
         "messages": messages,
-        "temperature": 0.9,
+        "temperature": 0.8, # Character မပျက်စေရန် အနည်းငယ် လျှော့ချထားသည်
         "top_p": 0.9
     }
 
@@ -58,3 +57,8 @@ async def generate_response(prompt: str, history: List[Dict[str, str]] = None) -
     except Exception as e:
         logger.error(f"[AI Service Exception] {str(e)}")
         return None
+
+async def generate_morning_message() -> Optional[str]:
+    """AI ဆီမှ နေ့စဉ်မတူသော မောနင်းစာသား တောင်းခံမည့် Function"""
+    prompt = "မင်္ဂလာနံနက်ခင်းပါ လီဆာ! Blink တွေကို မနက်အိပ်ရာထ ချစ်စရာကောင်းအောင် နှုတ်ဆက်ပေးပါ။ (Emoji လေးတွေနဲ့ သဘာဝကျကျ အတိုလေးပဲ ရေးပေးပါ။)"
+    return await generate_response(prompt)
