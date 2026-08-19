@@ -207,3 +207,13 @@ async def update_morning_date(telegram_id: int, date_str: str):
         await session.patch(url, headers=HEADERS, json={"last_morning_msg_date": date_str})
     except Exception:
         pass
+
+def is_admin(user_id: int) -> bool:
+    """Environment variable မှ ADMIN_ID ကို လုံခြုံစွာ စစ်ဆေးပေးမည်"""
+    admin_id_env = os.getenv("ADMIN_ID")
+    if not admin_id_env:
+        return False
+    try:
+        return int(user_id) == int(admin_id_env.strip())
+    except ValueError:
+        return False
