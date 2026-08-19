@@ -1,4 +1,4 @@
-// Filename: bot_logic.py
+# Filename: bot_logic.py
 import os
 import asyncio
 import logging
