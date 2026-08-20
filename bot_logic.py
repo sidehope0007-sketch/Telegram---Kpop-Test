@@ -19,7 +19,8 @@ from db_manager import (
     set_user_plan,
     get_all_users,
     update_morning_date,
-    get_user_info
+    get_user_info,
+    is_admin  # Admin စစ်ဆေးရန် သီးသန့် Function
 )
 from ai_service import generate_response, generate_morning_message
 
@@ -82,26 +83,41 @@ async def cmd_status(message: types.Message):
     
     user_data = await get_user_info(user_id)
     if not user_data:
-        return await processing_msg.edit_text("❌ အချက်အလက် ရှာမတွေ့ပါ သို့မဟုတ် Database Security (RLS) Error ရှိနေပါသည်။ Admin ကို အကြောင်းကြားပါ။")
+        return await processing_msg.edit_text("❌ အချက်အလက် ရှာမတွေ့ပါ သို့မဟုတ် Database Error ရှိနေပါသည်။ Admin ကို အကြောင်းကြားပါ။")
         
     plan = user_data.get('plan_type', 'free')
     count = user_data.get('message_count', 0)
+    expiry_date_ts = user_data.get('pro_expiry_date', 0)
     
+    # 📌 အခြေခံ အချက်အလက်
     status_text = (
         f"📊 **သင်၏ အသုံးပြုမှု အခြေအနေ**\n\n"
         f"👤 User ID: `{user_id}`\n"
-        f"💎 Plan: `{plan.upper()}`\n"
         f"💬 အသုံးပြုပြီးသမျှ: `{count}` messages\n"
     )
+    
+    # 📌 Pro ဖြစ်ပါက သက်တမ်းကုန်မည့် ရက်စွဲကို မြန်မာစံတော်ချိန် (UTC+6:30) ဖြင့် တွက်ချက်ပြသမည်
+    if plan == 'pro' and expiry_date_ts > 0:
+        yangon_tz = timezone(timedelta(hours=6, minutes=30))
+        # UNIX Timestamp မှ Datetime သို့ ပြောင်းလဲခြင်း
+        expiry_dt = datetime.fromtimestamp(expiry_date_ts, tz=timezone.utc).astimezone(yangon_tz)
+        # YYYY-MM-DD HH:MM (AM/PM) ပုံစံဖြင့် လှပစွာ ဖော်ပြခြင်း
+        expiry_str = expiry_dt.strftime("%Y-%m-%d %I:%M %p")
+        
+        status_text += f"💎 Plan: `PRO`\n"
+        status_text += f"⏳ သက်တမ်းကုန်မည့်ရက်:\n`{expiry_str}` (မြန်မာစံတော်ချိန်)\n"
+    else:
+        status_text += f"💎 Plan: `FREE`\n"
+        
     await processing_msg.edit_text(status_text, parse_mode="Markdown")
 
 @dp.message(Command("givepro7"))
 async def cmd_give_pro_7days(message: types.Message):
-    user_id_str = str(message.from_user.id)
-    logger.info(f"[Admin Check] User {user_id_str} trying to use givepro7. Expected ADMIN_ID: {ADMIN_ID}")
+    user_id = message.from_user.id
     
-    if user_id_str != str(ADMIN_ID).strip():
-        logger.warning(f"[Security] Unauthorized givepro7 attempt by {user_id_str}")
+    # 📌 Safe Admin Check (Type Mismatch နှင့် Space ပြဿနာများကို 100% ကာကွယ်သည်)
+    if not is_admin(user_id):
+        logger.warning(f"[Security] Unauthorized givepro7 attempt by user_id: {user_id}")
         return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
 
     args = message.text.split()
@@ -118,7 +134,7 @@ async def cmd_give_pro_7days(message: types.Message):
             except Exception as e:
                 logger.error(f"[Telegram Notice Error] Could not message target user: {e}")
         else:
-            await message.answer("❌ Database တွင် Update လုပ်၍ မရပါ။ Supabase Key သို့မဟုတ် Table Schema ကို စစ်ဆေးပါ။")
+            await message.answer("❌ Database တွင် Update လုပ်၍ မရပါ။")
     except ValueError:
         await message.answer("❌ User ID သည် ဂဏန်း (Number) သာ ဖြစ်ရပါမည်။")
     except Exception as e:
@@ -127,11 +143,11 @@ async def cmd_give_pro_7days(message: types.Message):
 
 @dp.message(Command("givepro30"))
 async def cmd_give_pro_30days(message: types.Message):
-    user_id_str = str(message.from_user.id)
-    logger.info(f"[Admin Check] User {user_id_str} trying to use givepro30. Expected ADMIN_ID: {ADMIN_ID}")
+    user_id = message.from_user.id
     
-    if user_id_str != str(ADMIN_ID).strip():
-        logger.warning(f"[Security] Unauthorized givepro30 attempt by {user_id_str}")
+    # 📌 Safe Admin Check
+    if not is_admin(user_id):
+        logger.warning(f"[Security] Unauthorized givepro30 attempt by user_id: {user_id}")
         return await message.answer("❌ သင်သည် ဤ Command ကို အသုံးပြုခွင့်မရှိပါ။")
 
     args = message.text.split()
@@ -148,7 +164,7 @@ async def cmd_give_pro_30days(message: types.Message):
             except Exception as e:
                 logger.error(f"[Telegram Notice Error] Could not message target user: {e}")
         else:
-            await message.answer("❌ Database တွင် Update လုပ်၍ မရပါ။ Supabase Key သို့မဟုတ် Table Schema ကို စစ်ဆေးပါ။")
+            await message.answer("❌ Database တွင် Update လုပ်၍ မရပါ။")
     except ValueError:
         await message.answer("❌ User ID သည် ဂဏန်း (Number) သာ ဖြစ်ရပါမည်။")
     except Exception as e:
@@ -174,7 +190,7 @@ async def handle_user_message(message: types.Message):
         processing_msg = await message.answer("⏳ Lisa Typing...")
 
         try:
-            chat_history = await get_chat_history(user_id, limit=100)
+            chat_history = await get_chat_history(user_id) # Token Budgeted history ဆွဲထုတ်မည်
             ai_response = await generate_response(user_text, history=chat_history)
             
             if not ai_response:
