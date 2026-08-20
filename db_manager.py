@@ -20,9 +20,10 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
+# 📌 SYSTEM CONFIGURATIONS
 FREE_RESET_SECONDS = 5 * 3600 # 5 Hours
 PRO_RESET_SECONDS = 4 * 3600
-FREE_MSG_LIMIT = 10
+FREE_MSG_LIMIT = 5            # 👈 အခမဲ့ အကြိမ်ရေကို ၁၀ မှ ၅ သို့ ပြောင်းလဲထားပါသည်
 PRO_MSG_LIMIT = float('inf')
 FREE_CHAR_LIMIT = 500
 PRO_CHAR_LIMIT = 8000
@@ -128,7 +129,6 @@ async def set_user_plan(telegram_id: int, plan: str, days: int = 30):
         new_expiry = 0
         
         if plan == "pro":
-            # Database မှ လက်ရှိ သက်တမ်းကို အရင်ဆွဲထုတ်စစ်ဆေးမည်
             async with session.get(url, headers=HEADERS) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -136,11 +136,9 @@ async def set_user_plan(telegram_id: int, plan: str, days: int = 30):
                         current_plan = data[0].get("plan_type", "free")
                         current_expiry = data[0].get("pro_expiry_date", 0)
                         
-                        # အကယ်၍ Pro ဖြစ်နေပြီး သက်တမ်းကျန်သေးလျှင် လက်ရှိသက်တမ်းပေါ်သို့ ရက်အသစ် ထပ်ပေါင်းမည်
                         if current_plan == "pro" and current_expiry > now:
                             new_expiry = current_expiry + (days * 86400)
                         else:
-                            # မဟုတ်ပါက ယနေ့မှစ၍ အသစ် တွက်ချက်မည်
                             new_expiry = now + (days * 86400)
                     else:
                         new_expiry = now + (days * 86400)
