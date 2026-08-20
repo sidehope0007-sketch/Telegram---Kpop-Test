@@ -4,7 +4,7 @@ import time
 import aiohttp
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone, timedelta  # 👈 (၃) ရက်စာ တွက်ရန် ထပ်တိုးထားသည်
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -120,14 +120,39 @@ async def update_usage(telegram_id: int, char_count: int):
     except Exception: pass
 
 async def set_user_plan(telegram_id: int, plan: str, days: int = 30):
+    """📌 Pro သက်တမ်း ထပ်ပေါင်းသည့်စနစ် (Stacking Logic)"""
     url = f"{SUPABASE_URL}/rest/v1/users?telegram_id=eq.{telegram_id}"
     session = await get_session()
     try:
         now = int(time.time())
-        payload = {"plan_type": plan, "message_count": 0, "pro_expiry_date": now + (days * 86400) if plan == "pro" else 0}
-        await session.patch(url, headers=HEADERS, json=payload)
-        return True
-    except Exception: return False
+        new_expiry = 0
+        
+        if plan == "pro":
+            # Database မှ လက်ရှိ သက်တမ်းကို အရင်ဆွဲထုတ်စစ်ဆေးမည်
+            async with session.get(url, headers=HEADERS) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data and len(data) > 0:
+                        current_plan = data[0].get("plan_type", "free")
+                        current_expiry = data[0].get("pro_expiry_date", 0)
+                        
+                        # အကယ်၍ Pro ဖြစ်နေပြီး သက်တမ်းကျန်သေးလျှင် လက်ရှိသက်တမ်းပေါ်သို့ ရက်အသစ် ထပ်ပေါင်းမည်
+                        if current_plan == "pro" and current_expiry > now:
+                            new_expiry = current_expiry + (days * 86400)
+                        else:
+                            # မဟုတ်ပါက ယနေ့မှစ၍ အသစ် တွက်ချက်မည်
+                            new_expiry = now + (days * 86400)
+                    else:
+                        new_expiry = now + (days * 86400)
+                else:
+                    new_expiry = now + (days * 86400)
+
+        payload = {"plan_type": plan, "message_count": 0, "pro_expiry_date": new_expiry}
+        patch_resp = await session.patch(url, headers=HEADERS, json=payload)
+        return patch_resp.status in (200, 204)
+    except Exception as e: 
+        logger.error(f"[DB Exception] set_user_plan: {e}")
+        return False
 
 async def save_chat(telegram_id: int, role: str, content: str):
     url = f"{SUPABASE_URL}/rest/v1/chat_history"
@@ -135,27 +160,19 @@ async def save_chat(telegram_id: int, role: str, content: str):
     session = await get_session()
     try:
         await session.post(url, headers=HEADERS, json=data)
-    except Exception as e:
-        logger.error(f"[DB Exception] save_chat: {e}")
+    except Exception: pass
 
-# 📌 ဤ Function ကို Time-Bound Query သို့ ပြောင်းလဲထားသည်
 async def get_chat_history(telegram_id: int, days: int = 3, limit: int = 200) -> List[Dict[str, str]]:
-    """(၃) ရက်စာ မှတ်ဉာဏ်များကိုသာ အတိအကျ ဆွဲထုတ်မည် (Token ကုန်ကျစရိတ် ကာကွယ်ရန်)"""
-    # လွန်ခဲ့သော ၃ ရက်၏ အချိန်ကို တွက်ချက်မည် (ISO 8601 Format)
     time_threshold = datetime.now(timezone.utc) - timedelta(days=days)
     iso_time = time_threshold.isoformat()
-    
-    # created_at=gte.{iso_time} ကို သုံး၍ အချိန်စစ်ထုတ်မည်
     url = f"{SUPABASE_URL}/rest/v1/chat_history?telegram_id=eq.{telegram_id}&created_at=gte.{iso_time}&order=created_at.desc&limit={limit}"
     session = await get_session()
     try:
         async with session.get(url, headers=HEADERS) as response:
             if response.status == 200:
                 data = await response.json()
-                # အသစ်မှ အဟောင်းဖြစ်နေသဖြင့် (DESC) AI နားလည်အောင် chronological (အဟောင်းမှ အသစ်) ပြန်လှန်ပေးမည်
                 return [{"role": row["role"], "content": row["content"]} for row in data][::-1]
-    except Exception as e:
-        logger.error(f"[DB Exception] get_chat_history: {e}")
+    except Exception: pass
     return []
 
 async def clear_history(telegram_id: int) -> bool:
