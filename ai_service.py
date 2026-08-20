@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL_ID = "google/gemma-4-31b-it"
 
+# 📌 STRICT TOKEN BUDGETING: API ကုန်ကျစရိတ်ကို အက္ခရာ ၆၀၀၀ (Tokens အရေအတွက် ခန့်မှန်း ၁၅၀၀) ဖြင့် အတိအကျ ကန့်သတ်မည်
+MAX_HISTORY_CHAR_BUDGET = 6000 
+
 session: Optional[aiohttp.ClientSession] = None
 
 async def get_session():
@@ -21,6 +24,31 @@ async def get_session():
     if session is None or session.closed:
         session = aiohttp.ClientSession()
     return session
+
+def trim_history_by_budget(history: List[Dict[str, str]], budget: int = MAX_HISTORY_CHAR_BUDGET) -> List[Dict[str, str]]:
+    """
+    [Architect's Logic] Token Cost လေလွင့်မှု မရှိစေရန် ၃ ရက်စာ History အားလုံးကို မပို့ဘဲ၊
+    သတ်မှတ်ထားသော အက္ခရာ (Character) အရေအတွက် အတွင်းသာ အသစ်ဆုံးစာများကို ရွေးချယ် ဖြတ်ယူမည်။
+    """
+    if not history:
+        return []
+    
+    trimmed_history = []
+    current_chars = 0
+    
+    # နောက်ဆုံး စာ (အသစ်ဆုံး) မှ စတင်၍ ရေတွက်ရန် Reverse လုပ်မည်
+    for msg in reversed(history):
+        msg_len = len(msg.get("content", ""))
+        
+        # Budget ပြည့်သွားပါက အဟောင်းများကို ဆက်မယူတော့ဘဲ ရပ်တန့်မည် (Token ကာကွယ်ခြင်း)
+        if current_chars + msg_len > budget:
+            break
+            
+        trimmed_history.append(msg)
+        current_chars += msg_len
+        
+    # AI နားလည်စေရန် မူလ အစီအစဉ်အတိုင်း (အဟောင်းမှ အသစ်သို့) ပြန်လှန်ပေးမည်
+    return trimmed_history[::-1]
 
 async def generate_response(prompt: str, history: List[Dict[str, str]] = None) -> Optional[str]:
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -33,8 +61,12 @@ async def generate_response(prompt: str, history: List[Dict[str, str]] = None) -
     }
     
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    
     if history:
-        messages.extend(history)
+        # 📌 ၃ ရက်စာ မှတ်ဉာဏ်ထဲမှ Token Budget အတွင်း ဝင်မည့် စာများကိုသာ စစ်ထုတ်ယူမည်
+        budgeted_history = trim_history_by_budget(history)
+        messages.extend(budgeted_history)
+        
     messages.append({"role": "user", "content": prompt})
 
     payload = {
